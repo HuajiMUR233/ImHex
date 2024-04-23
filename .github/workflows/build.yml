@@ -5,6 +5,7 @@ on:
     branches:
       - 'master'
       - 'releases/**'
+      - 'vtuberlogo/**'
   pull_request:
   workflow_dispatch:
 
