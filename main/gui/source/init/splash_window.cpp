@@ -80,67 +80,6 @@ namespace hex::init {
         glfwSetWindowPos(window, monitorX + (mode->width - windowWidth) / 2, monitorY + (mode->height - windowHeight) / 2);
     }
 
-    static ImColor getHighlightColor(u32 index) {
-        static auto highlightConfig = nlohmann::json::parse(romfs::get("splash_colors.json").string());
-        static std::list<nlohmann::json> selectedConfigs;
-        static nlohmann::json selectedConfig;
-
-        static std::mt19937 random(std::random_device{}());
-
-        if (selectedConfigs.empty()) {
-            const auto now = []{
-                const auto now = std::chrono::system_clock::now();
-                const auto time = std::chrono::system_clock::to_time_t(now);
-
-                return fmt::localtime(time);
-            }();
-
-            for (const auto &colorConfig : highlightConfig) {
-                if (!colorConfig.contains("time")) {
-                    selectedConfigs.push_back(colorConfig);
-                } else {
-                    const auto &time = colorConfig["time"];
-                    const auto &start = time["start"];
-                    const auto &end = time["end"];
-
-                    if ((now.tm_mon + 1) >= start[0] && (now.tm_mon + 1) <= end[0]) {
-                        if (now.tm_mday >= start[1] && now.tm_mday <= end[1]) {
-                            selectedConfigs.push_back(colorConfig);
-                        }
-                    }
-                }
-            }
-
-            // Remove the default color theme if there's another one available
-            if (selectedConfigs.size() != 1)
-                selectedConfigs.erase(selectedConfigs.begin());
-
-            selectedConfig = *std::next(selectedConfigs.begin(), random() % selectedConfigs.size());
-
-            log::debug("Using '{}' highlight color theme", selectedConfig["name"].get<std::string>());
-        }
-
-        const auto colorString = selectedConfig["colors"][index % selectedConfig["colors"].size()].get<std::string>();
-
-        if (colorString == "random") {
-            float r, g, b;
-            ImGui::ColorConvertHSVtoRGB(
-                    float(random() % 360) / 100.0F,
-                    float(25 + random() % 70) / 100.0F,
-                    float(85 + random() % 10) / 100.0F,
-                    r, g, b);
-
-            return { r, g, b, 0x50 / 255.0F };
-        } else if (colorString.starts_with("#")) {
-            u32 color = std::strtoul(colorString.substr(1).c_str(), nullptr, 16);
-
-            return IM_COL32((color >> 16) & 0xFF, (color >> 8) & 0xFF, color & 0xFF, 0x50);
-        } else {
-            log::error("Invalid color string '{}'", colorString);
-            return IM_COL32(0xFF, 0x00, 0xFF, 0xFF);
-        }
-    }
-
     void WindowSplash::createTask(const Task& task) {
         auto runTask = [&, task] {
             try {
@@ -255,75 +194,7 @@ namespace hex::init {
             // Draw the splash screen background
             drawList->AddImage(this->splashBackgroundTexture, ImVec2(0, 0), this->splashBackgroundTexture.getSize());
 
-            {
-
-                // Function to highlight a given number of bytes at a position in the splash screen
-                const auto highlightBytes = [&](ImVec2 start, size_t count, ImColor color, float opacity) {
-                    // Dimensions and number of bytes that are drawn. Taken from the splash screen image
-                    const auto hexSize = ImVec2(29, 18);
-                    const auto hexSpacing = ImVec2(17.4, 15);
-                    const auto hexStart = ImVec2(27, 127);
-
-                    constexpr auto HexCount = ImVec2(13, 7);
-
-                    bool isStart = true;
-
-                    color.Value.w *= opacity;
-
-                    // Loop over all the bytes on the splash screen
-                    for (u32 y = u32(start.y); y < u32(HexCount.y); y += 1) {
-                        for (u32 x = u32(start.x); x < u32(HexCount.x); x += 1) {
-                            if (count-- == 0)
-                                return;
-
-                            // Find the start position of the byte to draw
-                            auto pos = hexStart + ImVec2(float(x), float(y)) * (hexSize + hexSpacing);
-
-                            // Fill the rectangle in the byte with the given color
-                            drawList->AddRectFilled(pos + ImVec2(0, -hexSpacing.y / 2), pos + hexSize + ImVec2(0, hexSpacing.y / 2), color);
-
-                            // Add some extra color on the right if the current byte isn't the last byte, and we didn't reach the right side of the image
-                            if (count > 0 && x != u32(HexCount.x) - 1)
-                                drawList->AddRectFilled(pos + ImVec2(hexSize.x, -hexSpacing.y / 2), pos + hexSize + ImVec2(hexSpacing.x, hexSpacing.y / 2), color);
-
-                            // Add some extra color on the left if this is the first byte we're highlighting
-                            if (isStart) {
-                                isStart = false;
-                                drawList->AddRectFilled(pos - hexSpacing / 2, pos + ImVec2(0, hexSize.y + hexSpacing.y / 2), color);
-                            }
-
-                            // Add some extra color on the right if this is the last byte
-                            if (count == 0) {
-                                drawList->AddRectFilled(pos + ImVec2(hexSize.x, -hexSpacing.y / 2), pos + hexSize + hexSpacing / 2, color);
-                            }
-                        }
-
-                        start.x = 0;
-                    }
-                };
-
-                // Draw all highlights, slowly fading them in as the init tasks progress
-                for (const auto &highlight : this->highlights)
-                    highlightBytes(highlight.start, highlight.count, highlight.color, this->progressLerp);
-            }
-
             this->progressLerp += (m_progress - this->progressLerp) * 0.1F;
-
-            // Draw the splash screen foreground
-            drawList->AddImage(this->splashTextTexture, ImVec2(0, 0), this->splashTextTexture.getSize());
-
-            // Draw the "copyright" notice
-            drawList->AddText(ImVec2(35, 85), ImColor(0xFF, 0xFF, 0xFF, 0xFF), hex::format("WerWolv\n2020 - {0}", &__DATE__[7]).c_str());
-
-            // Draw version information
-            // In debug builds, also display the current commit hash and branch
-            #if defined(DEBUG)
-                const static auto VersionInfo = hex::format("{0} : {1}@{2}", ImHexApi::System::getImHexVersion(), ImHexApi::System::getCommitBranch(), ImHexApi::System::getCommitHash());
-            #else
-                const static auto VersionInfo = hex::format("{0}", ImHexApi::System::getImHexVersion());
-            #endif
-
-            drawList->AddText(ImVec2((this->splashBackgroundTexture.getSize().x - ImGui::CalcTextSize(VersionInfo.c_str()).x) / 2, 105), ImColor(0xFF, 0xFF, 0xFF, 0xFF), VersionInfo.c_str());
         }
 
         // Draw the task progress bar
@@ -337,12 +208,12 @@ namespace hex::init {
             const auto progressSize = ImVec2(progressBackgroundSize.x * m_progress, 10);
 
             // Draw progress bar
-            drawList->AddRectFilled(progressStart, progressStart + progressSize, 0xD0FFFFFF);
+            drawList->AddRectFilled(progressStart, progressStart + progressSize, 0xD01D1D1F);
 
             // Draw task names separated by | characters
             if (!m_currTaskNames.empty()) {
                 drawList->PushClipRect(progressBackgroundStart, progressBackgroundStart + progressBackgroundSize, true);
-                drawList->AddText(progressStart + ImVec2(5, -20), ImColor(0xFF, 0xFF, 0xFF, 0xFF), hex::format("{}", fmt::join(m_currTaskNames, " | ")).c_str());
+                drawList->AddText(progressStart + ImVec2(5, -20), ImColor(0x1D, 0x1D, 0x1F, 0xFF), hex::format("{}", fmt::join(m_currTaskNames, " | ")).c_str());
                 drawList->PopClipRect();
             }
         }
@@ -518,32 +389,12 @@ namespace hex::init {
 
         // Load splash screen image from romfs
         this->splashBackgroundTexture = ImGuiExt::Texture(romfs::get("splash_background.png").span(), ImGuiExt::Texture::Filter::Linear);
-        this->splashTextTexture = ImGuiExt::Texture(romfs::get("splash_text.png").span(), ImGuiExt::Texture::Filter::Linear);
 
         // If the image couldn't be loaded correctly, something went wrong during the build process
         // Close the application since this would lead to errors later on anyway.
-        if (!this->splashBackgroundTexture.isValid() || !this->splashTextTexture.isValid()) {
+        if (!this->splashBackgroundTexture.isValid()) {
             log::fatal("Could not load splash screen image!");
             std::exit(EXIT_FAILURE);
-        }
-
-        std::mt19937 rng(std::random_device{}());
-
-        u32 lastPos = 0;
-        u32 lastCount = 0;
-        u32 index = 0;
-        for (auto &highlight : this->highlights) {
-            u32 newPos = lastPos + lastCount + (rng() % 35);
-            u32 newCount = (rng() % 7) + 3;
-            highlight.start.x = float(newPos % 13);
-            highlight.start.y = float(newPos / 13);
-            highlight.count = newCount;
-
-            highlight.color = getHighlightColor(index);
-
-            lastPos = newPos;
-            lastCount = newCount;
-            index += 1;
         }
     }
 
